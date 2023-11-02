@@ -52,11 +52,11 @@ type discordHook struct {
 	Embeds    []discordEmbed `json:"embeds"`
 }
 
-func getTrainsList() []train {
+func getTrainsList() []*train {
 	// Change this
-	return []train{
+	return []*train{
 		{Name: "小田急小田原線", InfoUrl: "https://transit.yahoo.co.jp/diainfo/109/0"},
-		//{Name: "相模線", InfoUrl: "https://transit.yahoo.co.jp/diainfo/33/0"},
+		{Name: "相模線", InfoUrl: "https://transit.yahoo.co.jp/diainfo/33/0"},
 	}
 }
 
@@ -107,51 +107,56 @@ func notifyToDiscord(message string, url string, level string) {
 	defer res.Body.Close()
 }
 
-func checkTrainStatus() {
-	trains := getTrainsList()
+func checkTrainStatus(trains []*train) {
+	for i, t := range trains {
+		client := &http.Client{}
+		req, err := http.NewRequest("GET", t.InfoUrl, nil)
+		if err != nil {
+			log.Fatalln(err)
+		}
 
-	for {
-		for i, t := range trains {
-			client := &http.Client{}
-			req, err := http.NewRequest("GET", t.InfoUrl, nil)
-			if err != nil {
-				log.Fatalln(err)
+		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/118.0")
+
+		resp, err := client.Do(req)
+		if err != nil {
+			log.Fatalln(err)
+		}
+
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			log.Fatal("Failed to scrape: server returned non-200 status code")
+		}
+
+		doc, err := goquery.NewDocumentFromReader(resp.Body)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		// .Findでtroubleクラスのddタグを探す
+		if doc.Find("dd.trouble").Length() > 0 {
+			fmt.Printf("%sは遅延しています\n", t.Name)
+			if !t.IsDelay {
+				notifyToDiscord(fmt.Sprintf("%sが遅延しています。", t.Name), t.InfoUrl, "warning")
+				trains[i].IsDelay = true
 			}
-
-			req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/118.0")
-
-			resp, err := client.Do(req)
-			if err != nil {
-				log.Fatalln(err)
-			}
-
-			defer resp.Body.Close()
-
-			doc, err := goquery.NewDocumentFromReader(resp.Body)
-			if err != nil {
-				log.Fatal(err)
-			}
-
-			// .Findでtroubleクラスのddタグを探す
-			if doc.Find("dd.trouble").Length() > 0 {
-				fmt.Printf("%sは遅延しています\n", t.Name)
-				if !t.IsDelay {
-					notifyToDiscord(fmt.Sprintf("%sが遅延しています。", t.Name), t.InfoUrl, "warning")
-					trains[i].IsDelay = true
-				}
-			} else {
-				fmt.Printf("%sは遅延していません\n", t.Name)
-				if t.IsDelay {
-					notifyToDiscord(fmt.Sprintf("%sの遅延は解消しました。", t.Name), t.InfoUrl, "info")
-					trains[i].IsDelay = false
-				}
+		} else {
+			fmt.Printf("%sは遅延していません\n", t.Name)
+			if t.IsDelay {
+				notifyToDiscord(fmt.Sprintf("%sの遅延は解消しました。", t.Name), t.InfoUrl, "info")
+				trains[i].IsDelay = false
 			}
 		}
 
-		time.Sleep(40 * time.Second)
+		// 3秒クールタイム
+		time.Sleep(3 * time.Second)
 	}
 }
 
 func main() {
-	checkTrainStatus()
+	trains := getTrainsList()
+	for {
+		checkTrainStatus(trains)
+		time.Sleep(40 * time.Second)
+	}
 }
